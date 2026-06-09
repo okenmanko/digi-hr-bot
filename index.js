@@ -5,10 +5,9 @@ const { analyzeCandidate } = require("./services/aiService");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// VAQTINCHALIK USER DATABASE
 const users = {};
+const allUserIds = new Set();
 
-// VAKANSIYALAR
 const positions = [
   "Sotuv manageri",
   "Call center",
@@ -19,15 +18,24 @@ const positions = [
   "Shofyor-gruzchik",
 ];
 
-// START
+function isAdmin(ctx) {
+  return String(ctx.from.id) === String(process.env.SUPER_ADMIN_ID);
+}
+
+function saveUser(ctx) {
+  allUserIds.add(ctx.from.id);
+}
+
 bot.start((ctx) => {
+  saveUser(ctx);
+
   const userId = ctx.from.id;
 
   users[userId] = {
     step: "position",
   };
 
-  ctx.reply(
+  return ctx.reply(
     "Assalomu alaykum 😊\n\nDigi World HR botiga xush kelibsiz!\nQaysi vakansiyaga ariza topshirmoqchisiz?",
     Markup.keyboard([
       ["Sotuv manageri", "Call center"],
@@ -38,8 +46,28 @@ bot.start((ctx) => {
   );
 });
 
-// CONTACT HANDLER
+bot.command("admin", (ctx) => {
+  if (!isAdmin(ctx)) {
+    return ctx.reply("Sizda admin huquqi yo‘q.");
+  }
+
+  users[ctx.from.id] = {
+    step: "admin",
+  };
+
+  return ctx.reply(
+    "Admin panel:",
+    Markup.keyboard([
+      ["📢 Xabar yuborish"],
+      ["👥 Userlar soni"],
+      ["⬅️ Chiqish"],
+    ]).resize()
+  );
+});
+
 bot.on("contact", (ctx) => {
+  saveUser(ctx);
+
   const userId = ctx.from.id;
 
   if (!users[userId]) {
@@ -63,8 +91,9 @@ bot.on("contact", (ctx) => {
   return ctx.reply("Yoshingiz nechida?");
 });
 
-// VIDEO HANDLER
 bot.on("video", async (ctx) => {
+  saveUser(ctx);
+
   const userId = ctx.from.id;
 
   if (!users[userId]) {
@@ -85,18 +114,13 @@ bot.on("video", async (ctx) => {
 
   try {
     const aiResult = await analyzeCandidate(user);
-
-    user.score = aiResult.score;
-    user.aiSummary = aiResult.summary;
+    user.score = aiResult.score || "Noma’lum";
+    user.aiSummary = aiResult.summary || "AI summary qaytmadi.";
   } catch (error) {
     console.error("AI ERROR:", error.message);
-
     user.score = "AI xatolik";
-    user.aiSummary =
-      "AI tahlil vaqtida xatolik yuz berdi. HR qo‘lda ko‘rib chiqishi kerak.";
+    user.aiSummary = "AI tahlil vaqtida xatolik yuz berdi. HR qo‘lda ko‘rib chiqishi kerak.";
   }
-
-  console.log("YANGI KANDIDAT:", user);
 
   let candidateText = "";
 
@@ -172,21 +196,26 @@ ${user.aiSummary}
 ${user.status}`;
   }
 
-  await bot.telegram.sendMessage(
-    process.env.ADMIN_GROUP_ID,
-    candidateText,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("✅ Accept", `accept_${userId}`),
-        Markup.button.callback("👀 Review", `review_${userId}`),
-        Markup.button.callback("❌ Reject", `reject_${userId}`),
-      ],
-    ])
-  );
+  try {
+    await bot.telegram.sendMessage(
+      process.env.ADMIN_GROUP_ID,
+      candidateText,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("✅ Accept", `accept_${userId}`),
+          Markup.button.callback("👀 Review", `review_${userId}`),
+          Markup.button.callback("❌ Reject", `reject_${userId}`),
+        ],
+      ])
+    );
 
-  await bot.telegram.sendVideo(process.env.ADMIN_GROUP_ID, user.videoFileId, {
-    caption: `🎥 ${user.fullName} video tanishtiruvi`,
-  });
+    await bot.telegram.sendVideo(process.env.ADMIN_GROUP_ID, user.videoFileId, {
+      caption: `🎥 ${user.fullName} video tanishtiruvi`,
+    });
+  } catch (error) {
+    console.error("HR GROUP ERROR:", error.message);
+    await ctx.reply("Ariza qabul qilindi, lekin HR group’ga yuborishda xatolik bo‘ldi. Admin tekshiradi.");
+  }
 
   return ctx.reply(
     `✅ Arizangiz to‘liq qabul qilindi!
@@ -199,7 +228,6 @@ Tez orada HR menejer siz bilan bog‘lanadi 😊`
   );
 });
 
-// INLINE BUTTON: ACCEPT
 bot.action(/accept_(.+)/, async (ctx) => {
   const userId = ctx.match[1];
 
@@ -209,20 +237,16 @@ bot.action(/accept_(.+)/, async (ctx) => {
   }
 
   users[userId].status = "Accepted";
-
   await ctx.answerCbQuery("Accepted ✅");
 
-  return ctx.reply(
-    `✅ Kandidat qabul qilindi
+  return ctx.reply(`✅ Kandidat qabul qilindi
 
 👤 Ism: ${users[userId].fullName}
 📌 Vakansiya: ${users[userId].position}
 ⭐ Score: ${users[userId].score}/100
-📌 Status: Accepted`
-  );
+📌 Status: Accepted`);
 });
 
-// INLINE BUTTON: REVIEW
 bot.action(/review_(.+)/, async (ctx) => {
   const userId = ctx.match[1];
 
@@ -232,20 +256,16 @@ bot.action(/review_(.+)/, async (ctx) => {
   }
 
   users[userId].status = "Review";
-
   await ctx.answerCbQuery("Review 👀");
 
-  return ctx.reply(
-    `👀 Kandidat review holatiga o'tkazildi
+  return ctx.reply(`👀 Kandidat review holatiga o'tkazildi
 
 👤 Ism: ${users[userId].fullName}
 📌 Vakansiya: ${users[userId].position}
 ⭐ Score: ${users[userId].score}/100
-📌 Status: Review`
-  );
+📌 Status: Review`);
 });
 
-// INLINE BUTTON: REJECT
 bot.action(/reject_(.+)/, async (ctx) => {
   const userId = ctx.match[1];
 
@@ -255,21 +275,19 @@ bot.action(/reject_(.+)/, async (ctx) => {
   }
 
   users[userId].status = "Rejected";
-
   await ctx.answerCbQuery("Rejected ❌");
 
-  return ctx.reply(
-    `❌ Kandidat rad etildi
+  return ctx.reply(`❌ Kandidat rad etildi
 
 👤 Ism: ${users[userId].fullName}
 📌 Vakansiya: ${users[userId].position}
 ⭐ Score: ${users[userId].score}/100
-📌 Status: Rejected`
-  );
+📌 Status: Rejected`);
 });
 
-// TEXT HANDLER
-bot.on("text", (ctx) => {
+bot.on("text", async (ctx) => {
+  saveUser(ctx);
+
   const userId = ctx.from.id;
   const text = ctx.message.text;
 
@@ -279,7 +297,41 @@ bot.on("text", (ctx) => {
 
   const user = users[userId];
 
-  // STEP: POSITION
+  if (isAdmin(ctx) && text === "📢 Xabar yuborish") {
+    user.step = "broadcast";
+    return ctx.reply("Yubormoqchi bo‘lgan xabaringizni yozing:");
+  }
+
+  if (isAdmin(ctx) && text === "👥 Userlar soni") {
+    return ctx.reply(`Bot foydalanuvchilari soni: ${allUserIds.size}`);
+  }
+
+  if (isAdmin(ctx) && text === "⬅️ Chiqish") {
+    users[userId] = { step: "position" };
+    return ctx.reply("Admin paneldan chiqdingiz. /start orqali davom eting.", Markup.removeKeyboard());
+  }
+
+  if (isAdmin(ctx) && user.step === "broadcast") {
+    let success = 0;
+    let failed = 0;
+
+    for (const id of allUserIds) {
+      try {
+        await bot.telegram.sendMessage(id, text);
+        success++;
+      } catch (error) {
+        failed++;
+      }
+    }
+
+    user.step = "admin";
+
+    return ctx.reply(`✅ Xabar yuborildi
+
+Yetib bordi: ${success}
+Xatolik: ${failed}`);
+  }
+
   if (user.step === "position") {
     if (!positions.includes(text)) {
       return ctx.reply("Iltimos, pastdagi tugmalardan vakansiya tanlang.");
@@ -288,12 +340,9 @@ bot.on("text", (ctx) => {
     user.position = text;
     user.step = "fullName";
 
-    return ctx.reply(
-      `Siz tanladingiz: ${text} ✅\n\nEndi ism-familyangizni yozing.`
-    );
+    return ctx.reply(`Siz tanladingiz: ${text} ✅\n\nEndi ism-familyangizni yozing.`);
   }
 
-  // STEP: FULL NAME
   if (user.step === "fullName") {
     user.fullName = text;
 
@@ -306,88 +355,63 @@ bot.on("text", (ctx) => {
 
     return ctx.reply(
       "Telefon raqamingizni yuboring 📱",
-      Markup.keyboard([
-        [Markup.button.contactRequest("📞 Raqam yuborish")],
-      ]).resize()
+      Markup.keyboard([[Markup.button.contactRequest("📞 Raqam yuborish")]]).resize()
     );
   }
 
-  // DRIVER STEP: BIRTH DATE
   if (user.step === "birthDate") {
     user.birthDate = text;
     user.step = "address";
-
     return ctx.reply("Manzilingizni yozing.\n\nMasalan: Buxoro shahar, ...");
   }
 
-  // DRIVER STEP: ADDRESS
   if (user.step === "address") {
     user.address = text;
     user.step = "phone";
 
     return ctx.reply(
       "Telefon raqamingizni yuboring 📱",
-      Markup.keyboard([
-        [Markup.button.contactRequest("📞 Raqam yuborish")],
-      ]).resize()
+      Markup.keyboard([[Markup.button.contactRequest("📞 Raqam yuborish")]]).resize()
     );
   }
 
-  // STEP: PHONE
   if (user.step === "phone") {
     return ctx.reply("Iltimos, pastdagi 📞 Raqam yuborish tugmasini bosing.");
   }
 
-  // NORMAL STEP: AGE
   if (user.step === "age") {
     user.age = text;
     user.step = "city";
-
     return ctx.reply("Qaysi shahar yoki tumansiz?", Markup.removeKeyboard());
   }
 
-  // NORMAL STEP: CITY
   if (user.step === "city") {
     user.city = text;
     user.step = "experience";
-
-    return ctx.reply(
-      "Ish tajribangiz haqida qisqacha yozing.\n\nMasalan: 2 yil sotuvda ishlaganman."
-    );
+    return ctx.reply("Ish tajribangiz haqida qisqacha yozing.\n\nMasalan: 2 yil sotuvda ishlaganman.");
   }
 
-  // NORMAL STEP: EXPERIENCE
   if (user.step === "experience") {
     user.experience = text;
     user.step = "previousJob";
-
-    return ctx.reply(
-      "Oldingi ish joyingiz qayer edi?\n\nAgar oldin ishlamagan bo‘lsangiz, “yo‘q” deb yozing."
-    );
+    return ctx.reply("Oldingi ish joyingiz qayer edi?\n\nAgar oldin ishlamagan bo‘lsangiz, “yo‘q” deb yozing.");
   }
 
-  // DRIVER STEP: DRIVER LICENSE
   if (user.step === "driverLicense") {
     user.driverLicense = text;
     user.step = "healthIssue";
-
     return ctx.reply(
       "Sog‘ligingizda ishga ta’sir qilishi mumkin bo‘lgan muammo bormi?\n\nAgar yo‘q bo‘lsa, “yo‘q” deb yozing.",
       Markup.removeKeyboard()
     );
   }
 
-  // DRIVER STEP: HEALTH ISSUE
   if (user.step === "healthIssue") {
     user.healthIssue = text;
     user.step = "previousJob";
-
-    return ctx.reply(
-      "Bundan oldingi ish joyingiz qayer edi?\n\nAgar oldin ishlamagan bo‘lsangiz, “yo‘q” deb yozing."
-    );
+    return ctx.reply("Bundan oldingi ish joyingiz qayer edi?\n\nAgar oldin ishlamagan bo‘lsangiz, “yo‘q” deb yozing.");
   }
 
-  // STEP: PREVIOUS JOB
   if (user.step === "previousJob") {
     user.previousJob = text;
 
@@ -400,11 +424,9 @@ bot.on("text", (ctx) => {
     }
 
     user.step = "motivation";
-
     return ctx.reply("Nega aynan Digi World’da ishlamoqchisiz?");
   }
 
-  // NORMAL STEP: MOTIVATION
   if (user.step === "motivation") {
     user.motivation = text;
     user.step = "video";
@@ -414,20 +436,15 @@ bot.on("text", (ctx) => {
     );
   }
 
-  // STEP: VIDEO
   if (user.step === "video") {
     return ctx.reply("Iltimos, video yuboring 🎥");
   }
 
-  // STEP: DONE
   if (user.step === "done") {
-    return ctx.reply(
-      "Sizning arizangiz allaqachon qabul qilingan ✅\n\nYangi ariza topshirish uchun /start bosing."
-    );
+    return ctx.reply("Sizning arizangiz allaqachon qabul qilingan ✅\n\nYangi ariza topshirish uchun /start bosing.");
   }
 });
 
-// BOTNI ISHGA TUSHIRISH
 bot.launch();
 
 console.log("Bot ishga tushdi ✅");
