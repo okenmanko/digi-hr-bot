@@ -1,7 +1,6 @@
 require("dotenv").config();
 
 const { Telegraf, Markup } = require("telegraf");
-const { analyzeCandidate } = require("./services/aiService");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -23,7 +22,9 @@ function isAdmin(ctx) {
 }
 
 function saveUser(ctx) {
-  allUserIds.add(ctx.from.id);
+  if (ctx.from && ctx.from.id) {
+    allUserIds.add(ctx.from.id);
+  }
 }
 
 bot.start((ctx) => {
@@ -47,6 +48,8 @@ bot.start((ctx) => {
 });
 
 bot.command("admin", (ctx) => {
+  saveUser(ctx);
+
   if (!isAdmin(ctx)) {
     return ctx.reply("Sizda admin huquqi yo‘q.");
   }
@@ -110,18 +113,6 @@ bot.on("video", async (ctx) => {
   user.step = "done";
   user.status = "New";
 
-  await ctx.reply("Arizangiz tahlil qilinmoqda... ⏳");
-
-  try {
-    const aiResult = await analyzeCandidate(user);
-    user.score = aiResult.score || "Noma’lum";
-    user.aiSummary = aiResult.summary || "AI summary qaytmadi.";
-  } catch (error) {
-    console.error("AI ERROR:", error.message);
-    user.score = "AI xatolik";
-    user.aiSummary = "AI tahlil vaqtida xatolik yuz berdi. HR qo‘lda ko‘rib chiqishi kerak.";
-  }
-
   let candidateText = "";
 
   if (user.position === "Shofyor-gruzchik") {
@@ -150,12 +141,6 @@ ${user.healthIssue}
 
 🏢 Oldingi ish joyi:
 ${user.previousJob}
-
-⭐ AI Score:
-${user.score}/100
-
-🧠 AI Summary:
-${user.aiSummary}
 
 📌 Status:
 ${user.status}`;
@@ -186,12 +171,6 @@ ${user.previousJob}
 🎯 Motivatsiya:
 ${user.motivation}
 
-⭐ AI Score:
-${user.score}/100
-
-🧠 AI Summary:
-${user.aiSummary}
-
 📌 Status:
 ${user.status}`;
   }
@@ -214,7 +193,9 @@ ${user.status}`;
     });
   } catch (error) {
     console.error("HR GROUP ERROR:", error.message);
-    await ctx.reply("Ariza qabul qilindi, lekin HR group’ga yuborishda xatolik bo‘ldi. Admin tekshiradi.");
+    return ctx.reply(
+      "Arizangiz qabul qilindi, lekin HR group’ga yuborishda xatolik bo‘ldi. Admin tekshiradi."
+    );
   }
 
   return ctx.reply(
@@ -243,7 +224,6 @@ bot.action(/accept_(.+)/, async (ctx) => {
 
 👤 Ism: ${users[userId].fullName}
 📌 Vakansiya: ${users[userId].position}
-⭐ Score: ${users[userId].score}/100
 📌 Status: Accepted`);
 });
 
@@ -262,7 +242,6 @@ bot.action(/review_(.+)/, async (ctx) => {
 
 👤 Ism: ${users[userId].fullName}
 📌 Vakansiya: ${users[userId].position}
-⭐ Score: ${users[userId].score}/100
 📌 Status: Review`);
 });
 
@@ -281,7 +260,6 @@ bot.action(/reject_(.+)/, async (ctx) => {
 
 👤 Ism: ${users[userId].fullName}
 📌 Vakansiya: ${users[userId].position}
-⭐ Score: ${users[userId].score}/100
 📌 Status: Rejected`);
 });
 
@@ -308,7 +286,7 @@ bot.on("text", async (ctx) => {
 
   if (isAdmin(ctx) && text === "⬅️ Chiqish") {
     users[userId] = { step: "position" };
-    return ctx.reply("Admin paneldan chiqdingiz. /start orqali davom eting.", Markup.removeKeyboard());
+    return ctx.reply("Admin paneldan chiqdingiz.", Markup.removeKeyboard());
   }
 
   if (isAdmin(ctx) && user.step === "broadcast") {
@@ -407,42 +385,50 @@ Xatolik: ${failed}`);
   }
 
   if (user.step === "healthIssue") {
-    user.healthIssue = text;
-    user.step = "previousJob";
-    return ctx.reply("Bundan oldingi ish joyingiz qayer edi?\n\nAgar oldin ishlamagan bo‘lsangiz, “yo‘q” deb yozing.");
-  }
+  user.healthIssue = text;
+  user.step = "previousJob";
 
-  if (user.step === "previousJob") {
-    user.previousJob = text;
+  return ctx.reply(
+    "Bundan oldingi ish joyingiz qayer edi?\n\nAgar oldin ishlamagan bo‘lsangiz, 'yo‘q' deb yozing."
+  );
+}
 
-    if (user.position === "Shofyor-gruzchik") {
-      user.step = "video";
+if (user.step === "previousJob") {
+  user.previousJob = text;
 
-      return ctx.reply(
-        "Endi o‘zingiz haqingizda 30–60 soniyalik video yuboring 🎥\n\nVideoda ayting:\n1. Ismingiz\n2. Prava kategoriyangiz\n3. Oldingi ish joyingiz\n4. Nega Digi World’da ishlamoqchisiz?"
-      );
-    }
-
-    user.step = "motivation";
-    return ctx.reply("Nega aynan Digi World’da ishlamoqchisiz?");
-  }
-
-  if (user.step === "motivation") {
-    user.motivation = text;
+  if (user.position === "Shofyor-gruzchik") {
     user.step = "video";
 
     return ctx.reply(
-      "Endi o‘zingiz haqingizda 30–60 soniyalik video yuboring 🎥\n\nVideoda ayting:\n1. Ismingiz\n2. Qaysi vakansiyaga topshiryapsiz\n3. Tajribangiz\n4. Nega aynan Digi World’da ishlamoqchisiz?"
+      "Endi o‘zingiz haqingizda 30-60 soniyalik video yuboring 🎥"
     );
   }
 
-  if (user.step === "video") {
-    return ctx.reply("Iltimos, video yuboring 🎥");
-  }
+  user.step = "motivation";
 
-  if (user.step === "done") {
-    return ctx.reply("Sizning arizangiz allaqachon qabul qilingan ✅\n\nYangi ariza topshirish uchun /start bosing.");
-  }
+  return ctx.reply(
+    "Nega aynan Digi World’da ishlamoqchisiz?"
+  );
+}
+
+if (user.step === "motivation") {
+  user.motivation = text;
+  user.step = "video";
+
+  return ctx.reply(
+    "Endi o‘zingiz haqingizda 30-60 soniyalik video yuboring 🎥"
+  );
+}
+
+if (user.step === "video") {
+  return ctx.reply("Iltimos video yuboring 🎥");
+}
+
+if (user.step === "done") {
+  return ctx.reply(
+    "Arizangiz qabul qilingan ✅\n\nYangi ariza uchun /start bosing."
+  );
+}
 });
 
 bot.launch();
